@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Particle Clicker</title>
+<style>
+  :root{
+    --bg:#0f1220;
+    --panel:#121427;
+    --accent:#0ab4ff;
+    --muted:#98a0b3;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:Inter,system-ui,Arial,sans-serif}
+  .wrap{min-height:100%;display:flex;flex-direction:column;align-items:center;padding:28px;box-sizing:border-box}
+  header{width:100%;max-width:1100px;display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+  header h1{font-size:20px;margin:0}
+  .container{width:100%;max-width:1100px;display:flex;gap:20px;align-items:flex-start;flex-wrap:wrap}
+  .left{
+    flex:0 1 420px;
+    background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+    border-radius:12px;padding:18px;box-sizing:border-box;border:1px solid rgba(255,255,255,0.03)
+  }
+  .right{flex:1 1 520px;min-width:260px;max-height:75vh;overflow:auto;padding:18px;background:var(--panel);border-radius:12px;border:1px solid rgba(255,255,255,0.03)}
+  .stats{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+  .stat{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;min-width:100px;text-align:center}
+  .stat .value{font-weight:700;font-size:18px}
+  /* Big button area */
+  .click-area{display:flex;flex-direction:column;align-items:center;gap:12px}
+  .btn-wrap{position:relative;width:260px;height:260px}
+  #click-btn{
+    width:100%;height:100%;border-radius:999px;border:0;background:linear-gradient(180deg,var(--accent),#007fbf);
+    color:#031022;font-size:22px;font-weight:800;cursor:pointer;outline:none;box-shadow:0 8px 24px rgba(10,180,255,0.15), inset 0 -6px 16px rgba(0,0,0,0.25);
+    display:flex;align-items:center;justify-content:center;user-select:none;
+  }
+  #click-btn:active{transform:scale(.98)}
+  /* particle canvas sits over the button */
+  #particle-canvas{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;border-radius:999px}
+  .small-note{font-size:13px;color:var(--muted)}
+  /* Shop */
+  .shop-title{font-size:18px;margin-bottom:8px}
+  .shop-item{display:flex;align-items:center;justify-content:space-between;padding:10px;border-radius:8px;margin-bottom:8px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent)}
+  .shop-left{display:flex;flex-direction:column}
+  .shop-name{font-weight:700}
+  .shop-desc{font-size:13px;color:var(--muted)}
+  .shop-right{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+  .buy-btn{background:var(--accent);border:0;color:#031022;padding:8px 10px;border-radius:8px;font-weight:800;cursor:pointer}
+  .buy-btn:disabled{opacity:.45;cursor:not-allowed}
+  .controls{display:flex;gap:8px;margin-top:10px}
+  .ghost{opacity:.6;font-size:13px}
+  .footer-note{margin-top:14px;font-size:13px;color:var(--muted)}
+  /* responsive */
+  @media (max-width:720px){
+    .container{flex-direction:column;align-items:center}
+    .left,.right{width:100%;max-width:520px}
+    .btn-wrap{width:200px;height:200px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Particle Clicker</h1>
+    <div class="small-note">Particles get wilder as you upgrade ✨</div>
+  </header>
+
+  <div class="container">
+    <div class="left">
+      <div class="stats">
+        <div class="stat"><div class="label">Clicks</div><div id="clicks" class="value">0</div></div>
+        <div class="stat"><div class="label">Per Click</div><div id="cpc" class="value">1</div></div>
+        <div class="stat"><div class="label">Auto/sec</div><div id="auto" class="value">0</div></div>
+      </div>
+
+      <div class="click-area">
+        <div class="btn-wrap">
+          <canvas id="particle-canvas"></canvas>
+          <button id="click-btn">CLICK</button>
+        </div>
+        <div class="controls">
+          <button id="reset" class="buy-btn">Reset</button>
+          <button id="export" class="buy-btn">Export</button>
+          <button id="import" class="buy-btn">Import</button>
+        </div>
+        <div class="footer-note">Tip: Buy particle upgrades to spice up each click.</div>
+      </div>
+    </div>
+
+    <div class="right">
+      <div class="shop-title">Shop — Buy upgrades</div>
+      <div id="shop-list"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =========================
+   Save / Load helpers
+   ========================= */
+const SAVE_KEY = 'particle_clicker_v1';
+function saveToLocal(obj){
+  try{ localStorage.setItem(SAVE_KEY, JSON.stringify(obj)); }catch(e){ console.warn('Save failed',e); }
+}
+function loadFromLocal(){
+  try{ return JSON.parse(localStorage.getItem(SAVE_KEY)) || null }catch(e){ return null }
+}
+
+/* =========================
+   Game state & default
+   ========================= */
+const defaultState = {
+  clicks: 0,
+  baseCPC: 1,     // base clicks per click
+  cpcMultiplier: 1,
+  auto: 0,        // auto clicks per sec
+  particlesLevel: 0, // determines count
+  particleTheme: 0,  // which color scheme
+  upgradesBought: {}, // track purchased counts (for repeatable)
+};
+
+let state = loadFromLocal() || JSON.parse(JSON.stringify(defaultState));
+
+/* =========================
+   Upgrade definitions (12+)
+   - type: cpc adds to baseCPC (additive)
+   - type: cpc-mult multiplies cpcMultiplier
+   - type: auto adds autos
+   - type: particle adds particleLevel
+   - repeatable: boolean
+   ========================= */
+const upgrades = [
+  { id:'u1', name:'+1 Click Power', desc:'+1 to per-click', cost:10, type:'cpc', value:1, repeatable:true },
+  { id:'u2', name:'Auto Clicker +1/s', desc:'+1 auto click/sec', cost:50, type:'auto', value:1, repeatable:true },
+  { id:'u3', name:'Better Mouse +5', desc:'+5 to per-click', cost:200, type:'cpc', value:5, repeatable:true },
+  { id:'u4', name:'CPC x2', desc:'Multiply per-click by 2', cost:1000, type:'cpc-mult', value:2, repeatable:false },
+  { id:'u5', name:'Grandma +5/s', desc:'+5 auto/sec', cost:3000, type:'auto', value:5, repeatable:true },
+  { id:'u6', name:'Particle Burst +1', desc:'More particles per click', cost:120, type:'particle', value:1, repeatable:true },
+  { id:'u7', name:'Particle Colors', desc:'Unlock colorful particles', cost:800, type:'theme', value:1, repeatable:false },
+  { id:'u8', name:'Click Farm +20/s', desc:'+20 auto/sec', cost:10000, type:'auto', value:20, repeatable:true },
+  { id:'u9', name:'Diamond Mouse +50', desc:'+50 per click', cost:20000, type:'cpc', value:50, repeatable:true },
+  { id:'u10', name:'CPC x3', desc:'Multiply per-click by 3', cost:50000, type:'cpc-mult', value:3, repeatable:false },
+  { id:'u11', name:'Robot Factory +100/s', desc:'+100 auto/sec', cost:150000, type:'auto', value:100, repeatable:true },
+  { id:'u12', name:'Confetti Mode', desc:'Huge particle count & rainbow', cost:300000, type:'particle-theme', value:1, repeatable:false },
+  { id:'u13', name:'Godly Mouse +500', desc:'+500 per click', cost:500000, type:'cpc', value:500, repeatable:true }
+];
+
+/* =========================
+   DOM refs
+   ========================= */
+const clicksEl = document.getElementById('clicks');
+const cpcEl = document.getElementById('cpc');
+const autoEl = document.getElementById('auto');
+const clickBtn = document.getElementById('click-btn');
+const shopList = document.getElementById('shop-list');
+const canvas = document.getElementById('particle-canvas');
+const resetBtn = document.getElementById('reset');
+const exportBtn = document.getElementById('export');
+const importBtn = document.getElementById('import');
+
+/* =========================
+   Particle system
+   ========================= */
+const ctx = canvas.getContext('2d');
+let particles = [];
+function fitCanvasToButton(){
+  const rect = clickBtn.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize', fitCanvasToButton);
+fitCanvasToButton();
+
+function colorSchemeForTheme(theme){
+  if(theme <= 0) return ['#fff59d','#ffd54f','#ffd740','#fff176'];
+  if(theme === 1) return ['#ff9aa2','#ffb7b2','#ffdac1','#b5ead7','#c7ceea'];
+  return ['#ff0000','#ff7f00','#ffff00','#00ff00','#0000ff','#8b00ff','#ff1493'];
+}
+
+function spawnParticleBurst(localX, localY, amount){
+  const theme = state.particleTheme;
+  const colors = colorSchemeForTheme(theme);
+  for(let i=0;i<amount;i++){
+    const angle = Math.random()*Math.PI*2;
+    const speed = 40 + Math.random()*140;
+    const vx = Math.cos(angle)* (speed * (0.6 + Math.random()*0.8));
+    const vy = Math.sin(angle)* (speed * (0.6 + Math.random()*0.8));
+    const size = (3 + Math.random()*6) * (1 + state.particlesLevel*0.08);
+    particles.push({
+      x: localX, y: localY, vx, vy,
+      life: 0, ttl: 0.8 + Math.random()*0.8,
+      color: colors[Math.floor(Math.random()*colors.length)],
+      size
+    });
+  }
+}
+
+let lastTs = performance.now();
+function animate(ts){
+  const dt = (ts - lastTs)/1000;
+  lastTs = ts;
+
+  for(let p of particles){
+    p.life += dt;
+    const t = p.life / p.ttl;
+    p.vx *= 0.98;
+    p.vy *= 0.98;
+    p.vy += 120 * dt * (0.2 + 0.8*t);
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+  }
+  particles = particles.filter(p => p.life < p.ttl);
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  for(let p of particles){
+    const alpha = 1 - (p.life / p.ttl);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, Math.max(0.5, p.size * (0.6 + 0.4*Math.sin(p.life*10))), 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  requestAnimationFrame(animate);
+}
+requestAnimationFrame(animate);
+
+/* =========================
+   Game logic
+   ========================= */
+function getCPC(){
+  return Math.floor((state.baseCPC * state.cpcMultiplier) + 0.0001);
+}
+function getParticleCountForClick(){
+  const base = 6;
+  const levelBonus = state.particlesLevel * 2;
+  const scale = Math.min(20, Math.floor(getCPC()/5));
+  const burstModifiers = (state.particleTheme === 2 ? 3 : 1);
+  return Math.max(4, Math.round((base + levelBonus + scale) * burstModifiers));
+}
+function updateUI(){
+  clicksEl.textContent = Math.floor(state.clicks).toLocaleString();
+  cpcEl.textContent = getCPC();
+  autoEl.textContent = state.auto;
+}
+
+/* ============= shop rendering & purchases ============ */
+function costMulForRepeatable(bought){
+  return Math.pow(1.65, bought);
+}
+function renderShop(){
+  shopList.innerHTML = '';
+  upgrades.forEach(up => {
+    const bought = state.upgradesBought[up.id] || 0;
+    const cost = Math.max(1, Math.floor(up.cost * (up.repeatable ? costMulForRepeatable(bought) : 1)));
+    const div = document.createElement('div');
+    div.className = 'shop-item';
+    div.innerHTML = `
+      <div class="shop-left">
+        <div class="shop-name">${up.name} ${up.repeatable?`<span class="ghost">x${bought}</span>`:''}</div>
+        <div class="shop-desc">${up.desc}</div>
+      </div>
+      <div class="shop-right">
+        <div style="font-weight:800">${cost.toLocaleString()}</div>
+        <button class="buy-btn" ${state.clicks < cost ? 'disabled' : ''}>Buy</button>
+      </div>
+    `;
+    const btn = div.querySelector('button');
+    btn.addEventListener('click', () => {
+      if(state.clicks < cost) return;
+      state.clicks -= cost;
+      if(up.type === 'cpc') state.baseCPC += up.value;
+      else if(up.type === 'auto') state.auto += up.value;
+      else if(up.type === 'cpc-mult') state.cpcMultiplier *= up.value;
+      else if(up.type === 'particle') state.particlesLevel += up.value;
+      else if(up.type === 'theme') state.particleTheme = Math.max(state.particleTheme, 1);
+      else if(up.type === 'particle-theme') state.particleTheme = 2;
+      state.upgradesBought[up.id] = (state.upgradesBought[up.id] || 0) + 1;
+      saveGame();
+      renderShop();
+      updateUI();
+    });
+    shopList.appendChild(div);
+  });
+}
+
+/* =========================
+   Click handler: spawn particles, add clicks
+   ========================= */
+clickBtn.addEventListener('click', (ev) => {
+  const rect = clickBtn.getBoundingClientRect();
+  const x = (ev.clientX - rect.left);
+  const y = (ev.clientY - rect.top);
+
+  const amount = getCPC();
+  state.clicks += amount;
+
+  const pcount = getParticleCountForClick();
+  spawnParticleBurst(x, y, pcount);
+
+  updateUI();
+  saveGame();
+  renderShop();
+});
+
+/* =========================
+   Auto clicker tick
+   ========================= */
+setInterval(() => {
+  if(state.auto > 0){
+    state.clicks += state.auto;
+    updateUI();
+    saveGame();
+    renderShop();
+    const r = clickBtn.getBoundingClientRect();
+    const cx = r.width/2, cy = r.height/2;
+    spawnParticleBurst(cx, cy, Math.min(8, Math.max(2, Math.floor(state.auto/4))));
+  }
+}, 1000);
+
+/* =========================
+   Save / load / reset / import-export
+   ========================= */
+function saveGame(){
+  const out = {
+    clicks: state.clicks,
+    baseCPC: state.baseCPC,
+    cpcMultiplier: state.cpcMultiplier,
+    auto: state.auto,
+    particlesLevel: state.particlesLevel,
+    particleTheme: state.particleTheme,
+    upgradesBought: state.upgradesBought
+  };
+  saveToLocal(out);
+}
+
+function loadIntoState(obj){
+  state = Object.assign({}, JSON.parse(JSON.stringify(defaultState)), obj || {});
+  state.upgradesBought = state.upgradesBought || {};
+}
+
+resetBtn.addEventListener('click', () => {
+  if(!confirm('Reset all progress?')) return;
+  localStorage.removeItem(SAVE_KEY);
+  state = JSON.parse(JSON.stringify(defaultState));
+  saveGame();
+  renderShop(); updateUI();
+});
+
+exportBtn.addEventListener('click', () => {
+  const data = JSON.stringify(state);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(data).then(()=> alert('Export copied to clipboard'))
+      .catch(()=> prompt('Copy this JSON', data));
+  } else {
+    prompt('Copy this JSON', data);
+  }
+});
+importBtn.addEventListener('click', async () => {
+  const text = prompt('Paste exported save JSON here:');
+  if(!text) return;
+  try{
+    const parsed = JSON.parse(text);
+    loadIntoState(parsed);
+    saveGame();
+    renderShop(); updateUI();
+    alert('Imported!');
+  }catch(e){
+    alert('Invalid JSON');
+  }
+});
+
+/* =========================
+   Init on load
+   ========================= */
+(function init(){
+  const stored = loadFromLocal();
+  if(stored){ loadIntoState(stored); }
+  else { state = JSON.parse(JSON.stringify(defaultState)); }
+  fitCanvasToButton();
+  renderShop();
+  updateUI();
+  setTimeout(fitCanvasToButton,250);
+})();
+</script>
+</body>
+</html>
